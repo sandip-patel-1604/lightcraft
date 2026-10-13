@@ -110,6 +110,83 @@ fn subtract_brush_removes_sky_coverage_and_add_restores_it() {
 }
 
 #[test]
+fn intersect_brush_keeps_only_the_painted_part_of_the_sky() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "sky"}));
+    let r = h.request("ui.set", json!({"brushSize": 0.15, "brushFeather": 0.0, "brushFlow": 100.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.app.ui.brush_erase = true;
+    click(&mut h, "button:maskIntComp");
+    click(&mut h, "maskComp:intersect:brush");
+    assert!(!h.app.ui.brush_erase, "Intersect > Brush paints, whatever the brush mode was");
+    let m = develop(&h).masks[0].clone();
+    assert_eq!(m.components.len(), 2);
+    assert_eq!(m.components[1].op, lightcraft_develop::MaskOp::Intersect);
+    assert!(matches!(m.components[1].shape, MaskShape::Brush { .. }));
+    // nothing painted yet: the intersection is empty
+    assert!(mask_coverage(&h, 0, 50, 50) < 0.01);
+
+    brush_at(&mut h, 0.5, 0.5);
+    assert!(mask_coverage(&h, 0, 50, 50) > 0.99, "the painted sky is kept");
+    assert!(mask_coverage(&h, 0, 10, 10) < 0.01, "unpainted sky is left out");
+    assert_eq!(develop(&h).masks[0].components.len(), 2, "the stroke goes to the intersect component");
+    let painted = develop(&h);
+    exec(&mut h, "edit.undo", json!({}));
+    assert!(mask_coverage(&h, 0, 50, 50) < 0.01);
+    exec(&mut h, "edit.redo", json!({}));
+    assert_eq!(develop(&h).masks, painted.masks);
+
+    // Erase removes paint from the intersect component, taking that sky out again.
+    h.app.ui.brush_erase = true;
+    brush_at(&mut h, 0.5, 0.5);
+    assert!(mask_coverage(&h, 0, 50, 50) < 0.01);
+    h.settle(SETTLE);
+}
+
+#[test]
+fn colour_range_and_background_are_in_every_component_menu() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "sky"}));
+    for (button, op, mode) in [
+        ("button:maskAddComp", "add", lightcraft_develop::MaskOp::Add),
+        ("button:maskSubComp", "subtract", lightcraft_develop::MaskOp::Subtract),
+        ("button:maskIntComp", "intersect", lightcraft_develop::MaskOp::Intersect),
+    ] {
+        click(&mut h, button);
+        click(&mut h, &format!("maskComp:{op}:background"));
+        let m = develop(&h).masks[0].clone();
+        let c = m.components.last().expect("a component");
+        assert!(matches!(c.shape, MaskShape::Background) && c.op == mode, "{op} > Background: {c:?}");
+        click(&mut h, button);
+        click(&mut h, &format!("maskComp:{op}:colorRange"));
+        let m = develop(&h).masks[0].clone();
+        let c = m.components.last().expect("a component");
+        assert!(matches!(c.shape, MaskShape::ColorRange { .. }) && c.op == mode, "{op} > Color Range: {c:?}");
+        assert_eq!(h.app.ui.tool, "colorRange", "{op} > Color Range arms the eyedropper");
+        assert_eq!(h.app.ui.color_range_target, Some((m.id, m.components.len() - 1)));
+        // back to the sky alone, so the buttons under the component list stay on screen
+        exec(&mut h, "mask.component", json!({"component": 2, "action": "delete"}));
+        exec(&mut h, "mask.component", json!({"component": 1, "action": "delete"}));
+        assert_eq!(develop(&h).masks[0].components.len(), 1);
+    }
+    h.settle(SETTLE);
+}
+
+#[test]
+fn an_added_colour_range_component_gets_the_picked_colour_not_the_first() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "colorRange"}));
+    h.app.ui.tool.clear();
+    h.settle(SETTLE);
+    click(&mut h, "button:maskIntComp");
+    click(&mut h, "maskComp:intersect:colorRange");
+    assert_eq!(h.app.ui.tool, "colorRange");
+    brush_at(&mut h, 0.25, 0.5);
+    assert_eq!((color_samples_of(&h, 0), color_samples_of(&h, 1)), (0, 1), "the new component is sampled, not the mask's first colour range");
+    h.settle(SETTLE);
+}
+
+#[test]
 fn new_brush_starts_a_separate_mask_in_paint_mode() {
     let mut h = detail("panel.masking");
     exec(&mut h, "mask.add", json!({"kind": "sky"}));
@@ -1469,6 +1546,44 @@ fn color_range_pick_button_samples_the_photo() {
     // Pick again ends picking
     click(&mut h, "button:colorPick0");
     assert!(h.app.ui.tool.is_empty());
+    h.settle(SETTLE);
+}
+
+fn color_samples_of(h: &Headless, component: usize) -> usize {
+    match &develop(h).masks.last().expect("a mask").components[component].shape {
+        MaskShape::ColorRange { samples, .. } => samples.len(),
+        other => panic!("component {component} is {other:?}"),
+    }
+}
+
+/// A mask can hold several colour ranges. The eyedropper used to sample into the first one
+/// whichever Pick button armed it.
+#[test]
+fn the_pick_button_samples_into_its_own_colour_range() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "colorRange"}));
+    exec(&mut h, "mask.addComponent", json!({"op": "add", "kind": "colorRange"}));
+    h.app.ui.tool.clear();
+    h.settle(SETTLE);
+    click(&mut h, "button:colorPick1");
+    assert_eq!(h.app.ui.tool, "colorRange", "Pick arms the eyedropper");
+    brush_at(&mut h, 0.25, 0.5);
+    assert_eq!((color_samples_of(&h, 0), color_samples_of(&h, 1)), (0, 1), "the sample goes to the component whose Pick was clicked");
+
+    // the other Pick button takes the eyedropper over without ending it
+    click(&mut h, "button:colorPick0");
+    assert_eq!(h.app.ui.tool, "colorRange");
+    brush_at(&mut h, 0.7, 0.2);
+    assert_eq!((color_samples_of(&h, 0), color_samples_of(&h, 1)), (1, 1));
+
+    // the targeted component is gone: the click falls back to the mask's first colour range
+    click(&mut h, "button:colorPick1");
+    exec(&mut h, "mask.component", json!({"component": 1, "action": "delete"}));
+    h.settle(SETTLE);
+    let r = h.request("ui.pointer", json!({"shift": true, "events": [{"kind": "down", "x": 0.4, "y": 0.4}, {"kind": "up", "x": 0.4, "y": 0.4}]}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(develop(&h).masks.last().expect("a mask").components.len(), 1);
+    assert_eq!(color_samples_of(&h, 0), 2, "a stale target must not lose the click");
     h.settle(SETTLE);
 }
 

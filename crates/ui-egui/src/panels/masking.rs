@@ -133,6 +133,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                         "colorRange" => {
                             // an empty colour range; clicking the photo samples it
                             let _ = app.run("mask.add", json!({"kind": "colorRange"}));
+                            app.ui.color_range_target = None;
                             app.ui.tool = "colorRange".into();
                             app.toast(ui.ctx(), crate::i18n::tr("Click the photo to pick a colour · ⇧-click adds more"));
                         }
@@ -616,12 +617,20 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                         .color(t.text_dim)
                         .size(11.5),
                 );
-                let picking = app.ui.tool == "colorRange";
+                // a mask can hold several colour ranges: the eyedropper samples into the one picked here
+                let target = app.session.active_mask.map(|mask| (mask, comp));
+                let picking = app.ui.tool == "colorRange" && (app.ui.color_range_target.is_none() || app.ui.color_range_target == target);
                 if text_button(ui, &format!("colorPick{comp}"), crate::i18n::tr("Pick"), picking)
                     .on_hover_text(crate::i18n::tr("Click the photo to pick a colour; ⇧-click adds more (up to 5)"))
                     .clicked()
                 {
-                    app.ui.tool = if picking { String::new() } else { "colorRange".into() };
+                    if picking {
+                        app.ui.tool.clear();
+                        app.ui.color_range_target = None;
+                    } else {
+                        app.ui.tool = "colorRange".into();
+                        app.ui.color_range_target = target;
+                    }
                 }
             });
             let spec = ControlSpec {
@@ -808,22 +817,40 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
         ("radial", "Radial Gradient"),
         ("sky", "Sky"),
         ("subject", "Subject"),
+        ("background", "Background"),
+        ("colorRange", "Color Range"),
         ("luminanceRange", "Luminance Range"),
     ] {
-        // painting only adds or erases
-        if kind == "brush" && op == "intersect" {
-            continue;
-        }
         let b = ui.button(menu_label(label));
         register(ui.ctx(), format!("maskComp:{op}:{kind}"), b.rect);
         if b.clicked() {
-            if kind == "brush" {
-                let _ = app.run("tool.brush", json!({"op": op}));
-            } else {
-                let _ = app.run("mask.addComponent", json!({"op": op, "kind": kind}));
+            match kind {
+                "brush" => {
+                    let _ = app.run("tool.brush", json!({"op": op}));
+                }
+                "colorRange" => add_color_range(app, ui.ctx(), op),
+                _ => {
+                    let _ = app.run("mask.addComponent", json!({"op": op, "kind": kind}));
+                }
             }
         }
     }
+}
+
+/// Add an empty colour range to the selected mask, combined by `op`, and aim the eyedropper at
+/// it: clicking the photo samples it. Until then it selects nothing, so an intersected one
+/// empties the mask.
+fn add_color_range(app: &mut LightcraftApp, ctx: &egui::Context, op: &str) {
+    if let Err(e) = app.run("mask.addComponent", json!({"op": op, "kind": "colorRange"})) {
+        app.toast(ctx, e);
+        return;
+    }
+    let mask = app.session.active_mask;
+    let d = app.session.active().and_then(|id| app.session.develop_of(id));
+    let last = d.as_ref().and_then(|d| d.masks.iter().find(|m| Some(m.id) == mask)).and_then(|m| m.components.len().checked_sub(1));
+    app.ui.color_range_target = mask.zip(last);
+    app.ui.tool = "colorRange".into();
+    app.toast(ctx, crate::i18n::tr("Click the photo to pick a colour · ⇧-click adds more"));
 }
 
 fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {

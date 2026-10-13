@@ -658,6 +658,11 @@ pub struct UiState {
     pub grading_hidden: Option<(lightcraft_catalog::PhotoId, [bool; 3])>,
     /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "straighten", "remove".
     pub tool: String,
+    /// The colour range the eyedropper samples into (mask id, component index), set by that
+    /// component's Pick button or by adding a colour range to a mask. `None` leaves the choice
+    /// to `mask.sampleColor` (the selected mask's first colour range).
+    #[serde(skip)]
+    pub color_range_target: Option<(u32, usize)>,
     pub brush_size: f32,
     pub brush_feather: f32,
     pub brush_flow: f32,
@@ -1104,6 +1109,7 @@ impl Default for UiState {
             grading_mode: "3way".into(),
             grading_hidden: None,
             tool: String::new(),
+            color_range_target: None,
             brush_size: 0.04,
             brush_feather: 50.0,
             brush_flow: 60.0,

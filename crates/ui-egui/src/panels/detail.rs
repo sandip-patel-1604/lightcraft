@@ -1809,6 +1809,19 @@ fn radial_body_contains(shape: &MaskShape, at: Point, map: &CanvasMap) -> bool {
     x * x + y * y <= 1.0
 }
 
+/// The component the eyedropper was aimed at, while it is still a colour range of the selected
+/// mask. A target left behind by a deleted or reordered component, or by another mask, is
+/// ignored: `mask.sampleColor` then picks the mask's first colour range, as it always did.
+fn color_range_target(app: &LightcraftApp) -> Option<usize> {
+    let (mask, comp) = app.ui.color_range_target?;
+    if app.session.active_mask != Some(mask) {
+        return None;
+    }
+    let d = app.session.develop_of(app.session.active()?)?;
+    let c = d.masks.iter().find(|m| m.id == mask)?.components.get(comp)?;
+    matches!(c.shape, MaskShape::ColorRange { .. }).then_some(comp)
+}
+
 /// Colour Range eyedropper: a click samples the colour under it for the selected mask's
 /// colour range, at normalized frame coordinates (crop, rotation and zoom aware);
 /// ⇧-click adds a sample (up to 5).
@@ -1818,7 +1831,11 @@ fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Respons
     {
         let n = map.norm(q);
         let add = ui.input(|i| i.modifiers.shift);
-        if let Err(e) = app.run("mask.sampleColor", json!({"x": n.x, "y": n.y, "add": add})) {
+        let mut p = json!({"x": n.x, "y": n.y, "add": add});
+        if let Some(comp) = color_range_target(app) {
+            p["component"] = json!(comp);
+        }
+        if let Err(e) = app.run("mask.sampleColor", p) {
             app.toast(ui.ctx(), e);
         }
     }
