@@ -120,4 +120,7 @@ fn failed_gpu_renders_fall_back_with_a_reason() {
     // a request the GPU never renders is not a fallback
     let deep = RenderRequest { depth: lightcraft_pipeline::OutputDepth::U16, ..RenderRequest::fit(256, 256) };
     assert_eq!(lightcraft_gpu::try_render(&src, &info, &s, &deep, None).err(), Some(Fallback::NotTried));
+    // nor is the sharpen mask preview: the CPU renderer draws it
+    let mask = RenderRequest { overlay: lightcraft_pipeline::Overlay::SharpenMask, ..RenderRequest::fit(256, 256) };
+    assert_eq!(lightcraft_gpu::try_render(&src, &info, &s, &mask, None).err(), Some(Fallback::NotTried));
 }

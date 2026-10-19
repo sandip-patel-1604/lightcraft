@@ -599,7 +599,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     };
     lap("histogram", &mut t);
     let mut image = image;
-    let mask = overlay_alpha(req.overlay, &plan, &prep);
+    let mask = overlay_alpha(req.overlay, &plan, &prep).or_else(|| overlay_sharpen_mask(req.overlay, &plan, &prep));
     let masks = overlay_alphas_all(req.overlay, &plan, &prep);
     visualize::apply(&mut image, req.overlay, &plan, mask.as_ref(), masks.as_deref());
     let mut image = if plan.keep.is_some() { cut(&image) } else { image };
@@ -651,6 +651,25 @@ fn overlay_alpha(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Plane> 
     }
     let ev = plan.settings.light.exposure as f32;
     Some(masks::evaluate_one(m, &plan.frame, plan.w, plan.h, &prep.img, &prep.log_l, ev, plan.mattes.as_deref()))
+}
+
+/// The plane an [`Overlay::SharpenMask`] shows: how much of the sharpening each pixel keeps under
+/// the Masking setting, from the same detail band the per-pixel stage reads.
+fn overlay_sharpen_mask(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Plane> {
+    if o != Overlay::SharpenMask {
+        return None;
+    }
+    let k = (plan.settings.detail.sharpen_masking / 100.0) as f32;
+    // without Sharpening (or Texture) the band was not prepared: the preview still shows the mask
+    let blur = match &prep.texture_blur {
+        Some(b) => b.clone(),
+        None => Arc::new(lightcraft_raster::blur::gaussian(&prep.log_l, local::texture_sigma(prep.px_per_long))),
+    };
+    let mut m = Plane::new(prep.log_l.width, prep.log_l.height);
+    for ((out, l), b) in m.data.iter_mut().zip(&prep.log_l.data).zip(&blur.data) {
+        *out = finish::sharpen_edge_mask(k, l - b);
+    }
+    Some(m)
 }
 
 /// The alpha planes an `Overlay::AllMasks` shows: one per visible mask that has components,

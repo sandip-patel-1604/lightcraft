@@ -250,10 +250,12 @@ fn animated_rect(ctx: &egui::Context, anim: &mut bool, target: Rect) -> Rect {
 }
 
 /// Whether an overlay can be rendered on a region tile without changing what the tile means.
-/// Mask overlays are evaluated from the same mask alpha as the full render; the other diagnostic
-/// overlays either need whole-frame context or deliberately replace the loupe.
+/// Mask overlays are evaluated from the same mask alpha as the full render, and the clipping
+/// previews read each pixel on its own; the other diagnostic overlays either need whole-frame
+/// context or deliberately replace the loupe.
 pub(crate) fn overlay_supports_window(overlay: lightcraft_pipeline::Overlay) -> bool {
-    matches!(overlay, lightcraft_pipeline::Overlay::None | lightcraft_pipeline::Overlay::Mask { .. })
+    use lightcraft_pipeline::Overlay;
+    matches!(overlay, Overlay::None | Overlay::Mask { .. } | Overlay::ClipHighlights | Overlay::ClipShadows)
 }
 
 /// What a window render of the loupe needs to know about the view it belongs to.
@@ -445,6 +447,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let drawn_long = target_rect.width().max(target_rect.height()) * ppp;
     // the whole frame at about canvas size; the zoomed part of it is a window render (below)
     let look = d.hash64();
+    app.ui.option_held = ui.input(|i| i.modifiers.alt);
     let overlay = view_overlay(app, &d);
     // Diagnostic views that need whole-frame context, soft proofing, or reads too far for one
     // window still render the whole frame at the size it is drawn. A mask overlay is window-safe.
@@ -1235,12 +1238,31 @@ fn targeted_drag(app: &mut LightcraftApp, resp: &egui::Response, map: &CanvasMap
     }
 }
 
-/// The diagnostic overlay the loupe shows (the selected mask, Point Color's visualized range,
-/// Visualize Spots).
+/// What ⌥-dragging a slider of the Edit panel shows instead of the photo: the highlights or
+/// shadows a tone slider clips, or where sharpening applies under Detail ▸ Masking. Only while
+/// the slider is held and ⌥ is down.
+fn drag_preview(app: &LightcraftApp) -> Option<lightcraft_pipeline::Overlay> {
+    use lightcraft_pipeline::Overlay;
+    if !app.ui.option_held || app.ui.right != RightPanel::Edit {
+        return None;
+    }
+    match app.ui.dragging_control.as_deref()? {
+        "light.exposure" | "light.highlights" | "light.whites" => Some(Overlay::ClipHighlights),
+        "light.shadows" | "light.blacks" => Some(Overlay::ClipShadows),
+        "detail.sharpenMasking" => Some(Overlay::SharpenMask),
+        _ => None,
+    }
+}
+
+/// The diagnostic overlay the loupe shows (an ⌥-drag preview, the selected mask, Point Color's
+/// visualized range, Visualize Spots).
 pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcraft_pipeline::Overlay {
     use lightcraft_pipeline::{MaskView, Overlay};
     if app.ui.fullscreen {
         return Overlay::None;
+    }
+    if let Some(preview) = drag_preview(app) {
+        return preview;
     }
     // Show every visible mask's region at once (Ctrl+Shift+O / Cmd+Shift+O), ahead of the selected-mask overlay
     // so the shortcut is not shadowed by the always-on single-mask overlay.
@@ -1809,6 +1831,19 @@ fn radial_body_contains(shape: &MaskShape, at: Point, map: &CanvasMap) -> bool {
     x * x + y * y <= 1.0
 }
 
+/// The component the eyedropper was aimed at, while it is still a colour range of the selected
+/// mask. A target left behind by a deleted or reordered component, or by another mask, is
+/// ignored: `mask.sampleColor` then picks the mask's first colour range, as it always did.
+fn color_range_target(app: &LightcraftApp) -> Option<usize> {
+    let (mask, comp) = app.ui.color_range_target?;
+    if app.session.active_mask != Some(mask) {
+        return None;
+    }
+    let d = app.session.develop_of(app.session.active()?)?;
+    let c = d.masks.iter().find(|m| m.id == mask)?.components.get(comp)?;
+    matches!(c.shape, MaskShape::ColorRange { .. }).then_some(comp)
+}
+
 /// Colour Range eyedropper: a click samples the colour under it for the selected mask's
 /// colour range, at normalized frame coordinates (crop, rotation and zoom aware);
 /// ⇧-click adds a sample (up to 5).
@@ -1818,7 +1853,11 @@ fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Respons
     {
         let n = map.norm(q);
         let add = ui.input(|i| i.modifiers.shift);
-        if let Err(e) = app.run("mask.sampleColor", json!({"x": n.x, "y": n.y, "add": add})) {
+        let mut p = json!({"x": n.x, "y": n.y, "add": add});
+        if let Some(comp) = color_range_target(app) {
+            p["component"] = json!(comp);
+        }
+        if let Err(e) = app.run("mask.sampleColor", p) {
             app.toast(ui.ctx(), e);
         }
     }
