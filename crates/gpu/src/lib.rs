@@ -454,11 +454,13 @@ pub fn try_render(
         let effective = s.effective();
         let s: &DevelopSettings = &effective;
         // the kernel writes 8-bit output: high-bit-depth exports (and soft proofs) render on the CPU
-        // Visualize HDR needs the float HDR render: CPU too
+        // Visualize HDR needs the float HDR render: CPU too; the sharpen mask preview needs the
+        // detail band the kernel keeps to itself
         if !enabled()
             || req.depth != lightcraft_pipeline::OutputDepth::U8
             || req.proof.is_some()
             || req.overlay == lightcraft_pipeline::Overlay::HdrRange
+            || req.overlay == lightcraft_pipeline::Overlay::SharpenMask
         {
             return Err(Fallback::NotTried);
         }

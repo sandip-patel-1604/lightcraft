@@ -608,6 +608,10 @@ pub struct UiState {
     /// The develop control whose slider is being dragged (geometry sliders show a grid).
     #[serde(skip)]
     pub dragging_control: Option<String>,
+    /// ⌥ (Alt) is held, as of the loupe's last frame: dragging a tone slider or Detail ▸ Masking
+    /// with it shows what the slider clips or masks instead of the photo.
+    #[serde(skip)]
+    pub option_held: bool,
     pub search: String,
     /// Focus the search field on the next frame (Edit → Find…).
     #[serde(skip)]
@@ -1088,6 +1092,7 @@ impl Default for UiState {
             unnamed_focus: false,
             hidden_locations: Vec::new(),
             dragging_control: None,
+            option_held: false,
             external_edits: Vec::new(),
             was_focused: true,
             auto_import_at: 0.0,
